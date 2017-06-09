@@ -1,0 +1,3 @@
+git checkout -b new_branch #< create a new local branch with a copy of your code
+git push origin new_branch #< pushes to the server
+

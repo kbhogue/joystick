@@ -11,14 +11,19 @@ import sys
 from az_QwtDial import *
 from el_QwtDial import *
 import time
+import pygame
+import thread
+import threading
+from pygame.locals import *
+
 
 class MainWindow(QtGui.QWidget):
     def __init__(self, ip, port):
         QtGui.QMainWindow.__init__(self)
 
-        self.resize(700, 600)
+        self.resize(700, 630)
         self.setFixedWidth(700)
-        self.setFixedHeight(600)
+        self.setFixedHeight(630)
         self.setWindowTitle('MD01 Controller v1.0')
         self.setContentsMargins(0,0,0,0)
 
@@ -35,6 +40,7 @@ class MainWindow(QtGui.QWidget):
         self.callback    = None   #Callback accessor for tracking control
         self.connected   = False  #Status of TCP/IP connection to MD-01
         self.update_rate = 250    #Feedback Query Auto Update Interval in milliseconds
+        self.update_refresh_rate = 250 #Initial joystick sync rate
 
         self.initUI()
         self.darken()
@@ -47,8 +53,30 @@ class MainWindow(QtGui.QWidget):
         self.initControls()
         self.initMotorCtrl()
         self.initNet()
+
+        self.initJoy()
+
 	self.initJoystick()
         self.connectSignals()
+#####################################################################
+
+    def initJoy(self):
+        pygame.display.init()
+        pygame.joystick.init()
+	self.joy1 = pygame.joystick.Joystick(0)
+	self.joy1.init()
+        self.refreshJoy()
+
+    def refreshJoy(self):
+        pygame.event.pump()
+
+        self.axisAz = self.joy1.get_axis(0)
+	self.axisEl = self.joy1.get_axis(1)
+	self.axisSpeed = -1*self.joy1.get_axis(2)
+
+        print self.axisAz, self.axisEl, self.axisSpeed
+#####################################################################
+
 
     def setCallback(self, callback):
         self.callback = callback
@@ -76,6 +104,12 @@ class MainWindow(QtGui.QWidget):
         self.homeButton.clicked.connect(self.homeButtonEvent)
         self.updateButton.clicked.connect(self.updateButtonEvent)
         self.autoQuery_cb.stateChanged.connect(self.catchAutoQueryEvent)
+
+###########################################################################################
+	self.syncJoystick_cb.stateChanged.connect(self.catchSyncJoystickEvent)
+        QtCore.QObject.connect(self.updateJoystickRefreshTimer, QtCore.SIGNAL('timeout()'), self.refreshJoystickEvent)
+        QtCore.QObject.connect(self.update_refresh_rate_le, QtCore.SIGNAL('editingFinished()'), self.updateJoystickRefreshRate)
+###########################################################################################
 
         QtCore.QObject.connect(self.updateTimer, QtCore.SIGNAL('timeout()'), self.queryButtonEvent)
         QtCore.QObject.connect(self.update_rate_le, QtCore.SIGNAL('editingFinished()'), self.updateRate)
@@ -105,6 +139,22 @@ class MainWindow(QtGui.QWidget):
             self.el_compass.set_cur_el(self.cur_el)
         else:
             self.autoQuery_cb.setCheckState(QtCore.Qt.Unchecked)
+
+###########################################################################################
+    def refreshJoystickEvent(self):
+        self.refreshJoy()
+        self.progressUD.setValue(self.axisEl)
+        self.progressLR.setValue(self.axisAz)
+        self.progressSpeed.setValue(self.axisSpeed)
+
+        self.progressUD.setValue((self.axisEl + 1)*50)
+        self.progressLR.setValue((self.axisAz + 1)*50)
+        self.progressSpeed.setValue((self.axisSpeed + 1)*50)
+
+        self.progressUD.show()
+        self.progressLR.show()
+        self.progressSpeed.show()
+###########################################################################################
 
     def connectButtonEvent(self):
         if (not self.connected):  #Not connected, attempt to connect
@@ -137,10 +187,32 @@ class MainWindow(QtGui.QWidget):
             self.updateTimer.stop()
             print self.getTimeStampGMT() + "GUI  | Stopped Auto Update"
 
+
+###########################################################################################
+    def catchSyncJoystickEvent(self, state):
+        CheckState = (state == QtCore.Qt.Checked)
+        if CheckState == True:
+            self.updateJoystickRefreshTimer.start()
+            
+
+            print self.getTimeStampGMT() + "GUI  | Started Using Joystick, Refresh Rate: " + str(self.update_refresh_rate) + " [ms]"
+        else:
+            self.updateJoystickRefreshTimer.stop()
+            print self.getTimeStampGMT() + "GUI  | Stopped Using Joystick"
+###########################################################################################
+
+
     def updateRate(self):
         self.update_rate = float(self.update_rate_le.text()) * 1000.0
         self.updateTimer.setInterval(self.update_rate)
         print self.getTimeStampGMT() + "GUI  | Updated Rate Interval to " + str(self.update_rate) + " [ms]"
+
+###########################################################################################
+    def updateJoystickRefreshRate(self):
+        self.update_refresh_rate = float(self.update_refresh_rate_le.text()) * 1000.0
+        self.updateJoystickRefreshTimer.setInterval(self.update_refresh_rate)
+        print self.getTimeStampGMT() + "GUI  | Updated Joystick Refresh Rate Interval to " + str(self.update_refresh_rate) + " [ms]"
+###########################################################################################
 
     def updateIPAddress(self):
         self.ip = self.ipAddrTextBox.text()
@@ -451,7 +523,7 @@ class MainWindow(QtGui.QWidget):
 	self.progress_fr = QtGui.QFrame(self)
 	self.progress_fr.setFrameShape(QtGui.QFrame.StyledPanel)
 	self.progress_fr.setFixedWidth(680)
-	self.progress_fr.setFixedHeight(90)
+	self.progress_fr.setFixedHeight(110)
 
         vbox = QtGui.QVBoxLayout()
         hbox1 = QtGui.QHBoxLayout()
@@ -474,13 +546,19 @@ class MainWindow(QtGui.QWidget):
         self.setLayout(vbox)
 
     def initJoystick(self):
+###########################################################################################
+        self.syncJoystick_cb = QtGui.QCheckBox("Sync Joystick", self)  #Automatically update ADC voltages checkbox option
+        self.syncJoystick_cb.setStyleSheet("QCheckBox { font-size: 12px; \
+                                                    background-color:rgb(0,0,0); \
+                                                    color:rgb(255,255,255); }")
+###########################################################################################
 	self.progressUD = QtGui.QProgressBar()
 	self.progressLR = QtGui.QProgressBar()
 	self.progressSpeed = QtGui.QProgressBar()
 
-	self.progressUD.setRange(-1, 1)
-	self.progressLR.setRange(-1, 1)
-	self.progressSpeed.setRange(-1, 1)
+	self.progressUD.setRange(0, 100)
+	self.progressLR.setRange(0, 100)
+	self.progressSpeed.setRange(0, 100)
 
 	self.progressLRText = QtGui.QLabel("LEFT-RIGHT")
 	self.progressUDText = QtGui.QLabel("UP-DOWN")
@@ -493,10 +571,25 @@ class MainWindow(QtGui.QWidget):
 	self.progressLRText.setFixedWidth(80)
 	self.progressSpText.setFixedWidth(80)
 
+###########################################################################################
+        self.update_refresh_rate_le = QtGui.QLineEdit()
+        self.update_refresh_rate_le.setText(str(self.update_refresh_rate/1000.0))
+        self.update_val = QtGui.QDoubleValidator()
+        self.update_refresh_rate_le.setValidator(self.update_val)
+        self.update_refresh_rate_le.setEchoMode(QtGui.QLineEdit.Normal)
+        self.update_refresh_rate_le.setStyleSheet("QLineEdit {background-color:rgb(255,255,255); color:rgb(0,0,0);}")
+        self.update_refresh_rate_le.setMaxLength(4)
+        self.update_refresh_rate_le.setFixedWidth(50)
+###########################################################################################
+
 	vbox = QtGui.QVBoxLayout()
 	hbox1 = QtGui.QHBoxLayout()
 	hbox2 = QtGui.QHBoxLayout()
 	hbox3 = QtGui.QHBoxLayout()
+
+###########################################################################################
+        hbox4 = QtGui.QHBoxLayout()
+###########################################################################################
 
 	hbox1.addWidget(self.progressUDText)
 	hbox1.addWidget(self.progressUD)
@@ -504,11 +597,24 @@ class MainWindow(QtGui.QWidget):
 	hbox2.addWidget(self.progressLR)
 	hbox3.addWidget(self.progressSpText)
 	hbox3.addWidget(self.progressSpeed)
+
+###########################################################################################
+        hbox4.addWidget(self.syncJoystick_cb)
+        hbox4.addWidget(self.update_refresh_rate_le)
+###########################################################################################
+
 	vbox.addLayout(hbox1)
 	vbox.addLayout(hbox2)
 	vbox.addLayout(hbox3)
 
+###########################################################################################
+        vbox.addLayout(hbox4)
+###########################################################################################
+
 	self.progress_fr.setLayout(vbox)
+
+        self.updateJoystickRefreshTimer = QtCore.QTimer(self)
+        self.updateJoystickRefreshTimer.setInterval(self.update_refresh_rate)
 
     def darken(self):
         palette = QtGui.QPalette()
